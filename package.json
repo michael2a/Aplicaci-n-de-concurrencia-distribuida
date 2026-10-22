@@ -1,0 +1,19 @@
+{
+  "name": "ticketrush",
+  "version": "1.0.0",
+  "description": "Sistema de reservas con Redis, Mutex y Worker Threads",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "async-mutex": "^0.5.0",
+    "express": "^4.21.2",
+    "ioredis": "^5.4.2"
+  }
+}

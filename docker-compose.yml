@@ -1,0 +1,22 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: ticketrush-redis
+    ports:
+      - "6379:6379"
+
+  app:
+    build: .
+    container_name: ticketrush-app
+    image: ticketrush:1.0
+    ports:
+      - "3000:3000"
+    environment:
+      STATE_MODE: redis
+      USE_MUTEX: "true"
+      CPU_MODE: WORKER
+      CPU_ITERATIONS: "1000000"
+      MAX_WORKERS: "2"
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - redis

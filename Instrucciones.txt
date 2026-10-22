@@ -1,0 +1,340 @@
+TicketRush: consistencia con Redis y procesamiento concurrente con Worker Threads
+
+En este taller deberá diseñar e implementar un sistema distribuido para la reserva de 20 cupos de un evento.
+
+El sistema recibirá múltiples solicitudes concurrentes, será desplegado con varias réplicas y deberá garantizar que nunca se aprueben más reservas que los cupos disponibles.
+
+Además, cada reserva aprobada deberá ejecutar una tarea de procesamiento CPU-bound, por ejemplo generación de un código de validación, comprobante, firma simulada o cálculo intensivo.
+
+Durante el taller se analizarán dos problemas diferentes:
+
+Consistencia distribuida: varios Pods intentan modificar el mismo recurso lógico.
+
+Procesamiento concurrente: varias tareas CPU-bound necesitan ejecutarse sin bloquear innecesariamente el Main Thread.
+
+Para resolver y evaluar estos problemas se utilizarán Node.js, Worker Threads, Redis, Kubernetes y Grafana k6.
+
+El objetivo no es únicamente lograr que la aplicación funcione. Debe demostrar mediante experimentos qué problema aparece, cómo lo solucionó y qué efecto produjo cada decisión.
+
+Objetivos
+Al finalizar el taller, el estudiante deberá ser capaz de:
+
+Identificar una condición de concurrencia sobre un recurso compartido.
+Explicar por qué un Mutex local no coordina varios procesos o Pods.
+Utilizar Redis como mecanismo de coordinación o almacenamiento de estado compartido.
+Implementar tareas CPU-bound mediante Worker Threads.
+Limitar la cantidad de Workers simultáneos y evaluar experimentalmente diferentes configuraciones.
+Utilizar k6 para generar concurrencia y obtener evidencia cuantitativa del comportamiento del sistema.
+Parte 1. Construcción del sistema base
+Desarrolle una aplicación para gestionar inicialmente:
+
+20 cupos disponibles
+Debe disponer, como mínimo, de operaciones equivalentes a:
+
+POST /reserve
+GET  /status
+GET  /ping
+POST /reset
+La estructura de la API, nombres de archivos y diseño quedan a criterio del estudiante.
+
+Antes de continuar, verifique localmente que puede realizar reservas, consultar el estado, reiniciar los cupos y consultar /ping.
+
+Resultado esperado
+Con una sola ejecución de Node.js debe existir un único estado:
+
+Cupos iniciales = 20
+Evidencia
+Captura del sistema funcionando y breve explicación de las operaciones implementadas.
+
+Parte 2. Concurrencia con un único proceso
+Mantenga inicialmente los cupos en memoria local y proteja la sección crítica mediante un Mutex local.
+
+Prueba k6 N.º 1 – Consistencia con una instancia
+Aquí k6 se utilizará como generador de solicitudes concurrentes.
+
+Configure una prueba que produzca exactamente:
+
+100 usuarios virtuales
+1 intento de reserva por usuario
+100 solicitudes totales
+20 cupos disponibles
+Para este experimento es recomendable utilizar un escenario equivalente a:
+
+executor: 'per-vu-iterations'
+vus: 100
+iterations: 1
+Esto significa que cada uno de los 100 usuarios virtuales realizará una sola reserva.
+
+No utilice aquí una prueba de 30 segundos repitiendo reservas indefinidamente, porque necesitamos conocer exactamente cuántas operaciones fueron enviadas.
+
+Resultado esperado con una sola instancia
+Intentos             = 100
+Reservas aprobadas   = 20
+Reservas rechazadas  = 80
+Cupos restantes      = 0
+Debe cumplirse:
+
+aprobadas + cupos restantes = 20
+Evidencia
+Incluya la salida de k6, el estado final de la aplicación y una captura donde pueda comprobarse el número de reservas aprobadas y rechazadas.
+
+Parte 3. Convertir el sistema en distribuido
+Contenerice la aplicación y despliegue inicialmente una réplica en Kubernetes.
+
+Cuando confirme que funciona correctamente, escale a:
+
+3 Pods
+Mantenga temporalmente:
+
+estado local
++
+Mutex local
+Repita exactamente la misma prueba k6 N.º 1.
+
+No modifique:
+
+VUs
+cantidad de intentos
+cupos iniciales
+El objetivo ahora es comprobar si la misma solución sigue siendo válida cuando existen tres procesos independientes.
+
+Cada respuesta deberá permitir conocer qué Pod la procesó, por ejemplo mediante el hostname.
+
+Qué debe analizar
+Cada Pod posee:
+
+su propia memoria
+su propio estado
+su propio Mutex
+Por tanto, un Mutex dentro del Pod A no controla directamente al Pod B ni al Pod C.
+
+Evidencia
+Incluya:
+
+kubectl get pods
+resultado de k6
+Pods que atendieron las solicitudes
+estado observado después de la prueba
+No solucione inmediatamente el problema. Primero debe demostrarlo y explicarlo.
+
+Parte 4. Estado compartido y coordinación mediante Redis
+Modifique la arquitectura para que los tres Pods utilicen un estado lógico común mediante Redis.
+
+Conceptualmente:
+
+                 Redis
+              cupos = 20
+                  ↑
+          ┌───────┼───────┐
+          │       │       │
+        Pod A   Pod B   Pod C
+          ↑       ↑       ↑
+              Kubernetes
+                  ↑
+                 k6
+La solución deberá evitar que operaciones concurrentes provoquen sobreventa.
+
+Puede utilizar una operación atómica de Redis, un lock distribuido, un script Lua u otra estrategia técnicamente válida.
+
+Debe explicar cuál eligió y por qué.
+
+Prueba k6 N.º 2 – Consistencia distribuida
+Repita:
+
+100 VUs
+1 reserva por VU
+20 cupos
+3 Pods
+Redis
+El sistema deberá producir:
+
+100 intentos
+20 aprobados
+80 rechazados
+0 disponibles
+y nunca:
+
+más de 20 reservas aprobadas
+cupos negativos
+Aquí k6 ya no se utiliza solamente para comprobar que el servidor responde.
+
+La pregunta es:
+
+¿La regla de negocio continúa siendo correcta cuando 100 operaciones concurrentes son procesadas por distintas réplicas?
+
+Evidencia
+Debe mostrar:
+
+Redis ejecutándose.
+Los tres Pods.
+Resultado de k6.
+Estado final almacenado/coordinado mediante Redis.
+Número total de aprobaciones.
+Número total de rechazos.
+Parte 5. Incorporar procesamiento CPU-bound
+Cada reserva aprobada deberá generar posteriormente algún trabajo CPU-bound.
+
+Ejemplos posibles:
+
+generación de código de validación
+hash repetitivo
+firma simulada
+procesamiento matemático
+generación de comprobante
+La tarea debe durar lo suficiente para observar experimentalmente su impacto.
+
+Implemente dos versiones:
+
+Modo MAIN
+La tarea CPU-bound se ejecuta en el Main Thread.
+
+Modo WORKER
+La misma tarea se ejecuta mediante Worker Thread.
+No disminuya artificialmente el trabajo en la segunda versión. El cálculo debe ser equivalente.
+
+Parte 6. ¿Para qué usamos k6 en esta comparación?
+En esta parte k6 tendrá otro propósito.
+
+No medirá los cupos.
+
+Medirá si el servidor puede seguir atendiendo a otros clientes mientras realiza una tarea pesada.
+
+Prueba k6 N.º 3 – Disponibilidad del Main Thread
+Mantenga tráfico constante sobre:
+
+GET /ping
+Una configuración sugerida es:
+
+20 VUs
+30 segundos
+sleep = 0.25 s
+Durante la prueba provoque trabajo CPU-bound.
+
+Realice dos corridas independientes:
+
+Corrida A → CPU-bound en Main Thread
+Corrida B → CPU-bound mediante Worker Thread
+La carga de k6 debe ser exactamente igual en ambas.
+
+Compare:
+
+Métrica	Main Thread	Worker Thread
+http_reqs	 	 
+requests/s	 	 
+http_req_failed	 	 
+avg	 	 
+p95	 	 
+max	 	 
+Preste especial atención a:
+
+max: permite detectar solicitudes que quedaron bloqueadas durante varios segundos.
+
+p95: indica cuánto tardó como máximo aproximadamente el 95 % de las solicitudes.
+
+requests/s: muestra cuántas solicitudes pudo mantener el servidor.
+
+http_req_failed: indica si aparecieron errores.
+
+Qué debe demostrar
+No basta con afirmar:
+
+“Con Worker funciona mejor.”
+
+Debe demostrarlo mediante los resultados obtenidos.
+
+Parte 7. Reto principal: límite de Worker Threads
+Ahora deberá controlar cuántos Workers pueden ejecutar tareas simultáneamente.
+
+El sistema deberá ser probado con:
+
+máximo 1 Worker
+máximo 2 Workers
+máximo 4 Workers
+máximo 8 Workers
+Cuando se alcance el límite, las tareas adicionales deberán esperar en una cola o mecanismo equivalente.
+
+No se permite simplemente crear Workers ilimitadamente.
+
+Puede implementar:
+
+cola de tareas
+contador de Workers activos
+Worker Pool
+otra estrategia equivalente
+Prueba k6 N.º 4 – Comparación del límite de Workers
+Para esta comparación deberá mantener exactamente:
+
+la misma carga
+la misma duración
+el mismo trabajo CPU
+los mismos Pods
+los mismos endpoints
+Solo cambia:
+
+cantidad máxima de Workers
+Registre:
+
+Máx. Workers	Req/s	Failed %	Avg	p95	Max	Tiempo total
+1	 	 	 	 	 	 
+2	 	 	 	 	 	 
+4	 	 	 	 	 	 
+8	 	 	 	 	 	 
+Debe determinar experimentalmente:
+
+¿Más Workers siempre producen mejor rendimiento?
+
+La respuesta deberá basarse en las métricas obtenidas en su propio equipo.
+
+Parte 8. Prueba integrada final
+Seleccione, según sus resultados anteriores, la cantidad de Workers que considere más adecuada.
+
+Realice una ejecución final utilizando:
+
+3 Pods
++
+Redis
++
+límite de Workers
++
+k6
+La prueba deberá demostrar conjuntamente:
+
+✓ máximo 20 reservas aprobadas
+✓ estado único mediante Redis
+✓ solicitudes atendidas por distintos Pods
+✓ tareas CPU-bound ejecutadas mediante Workers
+✓ cantidad máxima de Workers controlada
+✓ /ping continúa respondiendo bajo carga
+Esta constituye la evidencia principal del taller.
+
+Evidencias
+Las capturas deben demostrar lo que se afirma. No se calificará una colección de imágenes sin interpretación.
+
+Para cada experimento importante indique brevemente:
+
+¿Qué hice?
+¿Qué esperaba?
+¿Qué ocurrió?
+¿Qué métricas obtuve?
+¿Qué concepto demuestra?
+Preguntas de análisis
+1. Con una sola réplica, un Mutex puede proteger correctamente una sección crítica. ¿Por qué esa misma solución deja de ser suficiente cuando existen tres Pods? Explique qué memoria y qué mecanismo de sincronización posee cada proceso.
+
+2. Su sistema recibe 100 solicitudes concurrentes para 20 cupos. ¿Qué evidencia permite afirmar que su solución con Redis mantiene consistencia y no simplemente que las solicitudes respondieron correctamente?
+
+3. ¿Por qué Worker Threads no soluciona la consistencia entre Pods y por qué Redis tampoco soluciona por sí solo el bloqueo del Main Thread?
+
+4. Analizando sus resultados con 1, 2, 4 y 8 Workers, ¿qué configuración obtuvo el mejor equilibrio en su equipo? Sustente su respuesta con requests/s, p95, máximo, errores y tiempo total.
+
+5. Una reserva fue confirmada y Redis descontó correctamente el cupo, pero el cliente no recibió la respuesta y vuelve a enviar exactamente la misma solicitud. ¿Qué problema puede producirse y cómo modificaría el sistema para evitarlo?
+
+Criterios de evaluación
+Criterio	Puntos
+Demostración del problema con estado y Mutex local en múltiples Pods	3
+Implementación y justificación de la coordinación mediante Redis	4
+Prueba de consistencia con k6: 100 intentos / 20 cupos	3
+Uso y comparación de Main Thread y Worker Threads	3
+Control y evaluación de 1, 2, 4 y 8 Workers	3
+Análisis de resultados y respuestas a las preguntas	2
+Calidad de evidencias, código y presentación técnica	2
+Total	20
